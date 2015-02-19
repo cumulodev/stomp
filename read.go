@@ -2,6 +2,7 @@ package stomp
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 )
 
@@ -16,6 +17,9 @@ func (c *Conn) readLoop() {
 		closed := c.closed
 		c.closeMu.Unlock()
 
+		// if connection was closed, the above received
+		// error (if any) is most likely due to the
+		// closed connection.
 		if closed {
 			return
 		}
@@ -28,11 +32,26 @@ func (c *Conn) readLoop() {
 		switch frame.Command {
 		case "MESSAGE":
 			c.dispatchMessage(frame)
+
 		case "ERROR":
-			c.Err = &Error{*frame}
+			c.Err = NewError(frame)
 			c.Close()
 		}
 	}
+}
+
+func (c *Conn) dispatchMessage(frame *Frame) {
+	c.subsMu.Lock()
+	defer c.subsMu.Unlock()
+
+	msg := Message{*frame}
+	if ch, ok := c.subs[msg.Subscription()]; ok {
+		ch <- msg
+		return
+	}
+
+	c.Err = fmt.Errorf("message received for unknown subscription on %q", msg.Destination())
+	c.Close()
 }
 
 func (c *Conn) readFrame() (*Frame, error) {

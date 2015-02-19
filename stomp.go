@@ -37,16 +37,16 @@ type Subscription struct {
 	C  chan Message
 }
 
-func Dial(network, addr string) (*Conn, error) {
+func Dial(network, addr string, options ...Option) (*Conn, error) {
 	conn, err := net.Dial(network, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return Connect(conn)
+	return Connect(conn, options...)
 }
 
-func Connect(conn io.ReadWriteCloser) (*Conn, error) {
+func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
 		conn:    conn,
 		scanner: bufio.NewScanner(conn),
@@ -60,14 +60,18 @@ func Connect(conn io.ReadWriteCloser) (*Conn, error) {
 			"accept-version": "1.2",
 			"heart-beat":     "0,1000",
 		},
-	})
+	}, options...)
 
-	//TODO parse CONNECTED frame
-	_, err := c.readFrame()
+	f, err := c.readFrame()
 	if err != nil {
 		return nil, err
 	}
 
+	if f.Command == "ERROR" {
+		return nil, NewError(f)
+	}
+
+	//TODO parse CONNECTED frame
 	go c.readLoop()
 	return c, nil
 }
@@ -95,18 +99,18 @@ func (c *Conn) closeSubscriptions() {
 	c.subs = make(map[string]chan Message)
 }
 
-func (c *Conn) Subscribe(queue string, ack AckMode) (*Subscription, error) {
+func (c *Conn) Subscribe(queue string, options ...Option) (*Subscription, error) {
 	id := randID()
 	frame := Frame{
 		Command: "SUBSCRIBE",
 		Header: Header{
 			"id":          id,
 			"destination": queue,
-			"ack":         string(ack),
+			"ack":         "auto",
 		},
 	}
 
-	if err := c.writeFrame(frame); err != nil {
+	if err := c.writeFrame(frame, options...); err != nil {
 		return nil, err
 	}
 
@@ -121,13 +125,13 @@ func (c *Conn) Subscribe(queue string, ack AckMode) (*Subscription, error) {
 	}, nil
 }
 
-func (c *Conn) Unsubscribe(s *Subscription) error {
+func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 	frame := Frame{
 		Command: "UNSUBSCRIBE",
 		Header:  Header{"id": s.Id},
 	}
-	err := c.writeFrame(frame)
-	if err != nil {
+
+	if err := c.writeFrame(frame, options...); err != nil {
 		return err
 	}
 
@@ -137,43 +141,41 @@ func (c *Conn) Unsubscribe(s *Subscription) error {
 	return nil
 }
 
-func (c *Conn) Send(destination, contentType string, body []byte, userDefined Header) error {
-	if userDefined == nil {
-		userDefined = Header{}
-	}
-
-	userDefined["destination"] = destination
-	userDefined["content-type"] = contentType
-	if len(body) > 0 {
-		userDefined["content-length"] = fmt.Sprintf("%d", len(body))
-	}
-
+func (c *Conn) Send(destination, contentType string, body []byte, options ...Option) error {
 	frame := Frame{
 		Command: "SEND",
-		Header:  userDefined,
-		Body:    body,
+		Header: Header{
+			"destination":  destination,
+			"content-type": contentType,
+		},
+		Body: body,
 	}
-	return c.writeFrame(frame)
+
+	if len(body) > 0 {
+		frame.Header["content-length"] = fmt.Sprintf("%d", len(body))
+	}
+
+	return c.writeFrame(frame, options...)
 }
 
-func (c *Conn) Ack(m *Message) error {
+func (c *Conn) Ack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
 		return c.writeFrame(Frame{
 			Command: "ACK",
 			Header:  Header{"id": id},
-		})
+		}, options...)
 	}
 	return nil
 }
 
-func (c *Conn) Nack(m *Message) error {
+func (c *Conn) Nack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
 		return c.writeFrame(Frame{
 			Command: "NACK",
 			Header:  Header{"id": id},
-		})
+		}, options...)
 	}
 	return nil
 }

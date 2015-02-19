@@ -21,6 +21,10 @@ type Error struct {
 	Frame
 }
 
+func NewError(f *Frame) *Error {
+	return &Error{*f}
+}
+
 func (m *Error) Error() string {
 	if msg := m.get("message"); msg != "" {
 		return msg
@@ -31,16 +35,6 @@ func (m *Error) Error() string {
 
 type Message struct {
 	Frame
-}
-
-func (c *Conn) dispatchMessage(frame *Frame) {
-	c.subsMu.Lock()
-	defer c.subsMu.Unlock()
-
-	msg := Message{*frame}
-	if ch, ok := c.subs[msg.Subscription()]; ok {
-		ch <- msg
-	}
 }
 
 func (m *Message) Id() string {

@@ -40,12 +40,16 @@ func encodeFrame(f Frame) []byte {
 	return buf.Bytes()
 }
 
-func (c *Conn) writeFrame(f Frame) error {
+func (c *Conn) writeFrame(f Frame, options ...Option) error {
 	c.closeMu.Lock()
 	closed := c.closed
 	c.closeMu.Unlock()
 	if closed {
 		return fmt.Errorf("writing to closed connection")
+	}
+
+	for _, fn := range options {
+		fn(f)
 	}
 
 	data := encodeFrame(f)
