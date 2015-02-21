@@ -1,6 +1,7 @@
 package stomp
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"strings"
@@ -37,6 +38,9 @@ func (c *Conn) readLoop() {
 			c.Err = NewError(frame)
 			c.Close()
 		}
+
+		//NOTE: if a default case is created, do not forget
+		// about an empty frame (=heartbeat)
 	}
 }
 
@@ -55,62 +59,47 @@ func (c *Conn) dispatchMessage(frame *Frame) {
 }
 
 func (c *Conn) readFrame() (*Frame, error) {
-	frame := &Frame{Header: Header{}}
-	fn := readCommand
+	// get stomp command
+	c.scanner.Split(bufio.ScanLines)
+	if res := c.scanner.Scan(); !res {
+		return nil, c.scanner.Err()
+	}
 
-loop:
+	command := c.scanner.Text()
+
+	if len(command) == 0 {
+		// received heartbeat, return empty frame
+		return &Frame{}, nil
+	}
+
+	// get stomp headers
+	header := make(Header)
 	for c.scanner.Scan() {
-		data := c.scanner.Bytes()
-		fn = fn(frame, data)
-		if fn == nil {
-			break loop
+		raw := c.scanner.Text()
+		if len(raw) == 0 {
+			break
 		}
+
+		key, value := decodeHeader(raw)
+		header[key] = value
 	}
 
-	if err := c.scanner.Err(); err != nil {
-		return nil, err
+	// get stomp body
+	c.scanner.Split(scanFrame)
+	if res := c.scanner.Scan(); !res {
+		return nil, c.scanner.Err()
 	}
 
-	return frame, nil
+	body := c.scanner.Bytes()
+
+	return &Frame{
+		Command: command,
+		Header:  header,
+		Body:    body,
+	}, nil
 }
 
-type frameFn func(frame *Frame, data []byte) frameFn
-
-func readCommand(frame *Frame, data []byte) frameFn {
-	if bytes.Equal(data, null) || bytes.Equal(data, newline) {
-		// EOL instead of command -> heart beat
-		return readCommand
-	}
-
-	frame.Command = string(data)
-	return readHeader
-}
-
-func readHeader(frame *Frame, data []byte) frameFn {
-	if bytes.Equal(data, newline) {
-		// single EOL -> end of header
-		return readBody
-	}
-
-	key, value := decodeHeader(data)
-	if _, ok := frame.Header[key]; !ok {
-		frame.Header[key] = value
-	}
-
-	return readHeader
-}
-
-func readBody(frame *Frame, data []byte) frameFn {
-	frame.Body = append(frame.Body, data...)
-	if bytes.HasSuffix(data, null) {
-		frame.Body = stripNull(frame.Body)
-		return nil
-	}
-
-	return readBody
-}
-
-func decodeHeader(header []byte) (string, string) {
+func decodeHeader(header string) (string, string) {
 	decode := func(v string) string {
 		v = strings.Replace(v, "\\r", "\r", -1)
 		v = strings.Replace(v, "\\n", "\n", -1)
@@ -119,8 +108,23 @@ func decodeHeader(header []byte) (string, string) {
 		return v
 	}
 
-	kv := strings.SplitN(string(header), ":", 2)
+	kv := strings.SplitN(header, ":", 2)
 	return decode(kv[0]), decode(kv[1])
+}
+
+func scanFrame(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexByte(data, '\x00'); i >= 0 {
+		// we have a non-empty body.
+		return i + 1, stripNull(data[0:i]), nil
+	}
+	if atEOF {
+		return len(data), stripNull(data), nil
+	}
+	// request more data.
+	return 0, nil, nil
 }
 
 func stripNull(data []byte) []byte {
