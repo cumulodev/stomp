@@ -17,6 +17,8 @@ func Heartbeat(client, server int) Option {
 	}
 }
 
+// Authenticate add the required headers to authenticate against
+// a secured STOMP server.
 func Authenticate(username, password string) Option {
 	return func(f Frame) {
 		f.Header["login"] = username

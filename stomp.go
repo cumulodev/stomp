@@ -11,14 +11,16 @@ import (
 
 // Valid values for the "ack" subscription header entry.
 const (
-	AckAuto       = AckMode("auto")
-	AckClient     = AckMode("client")
-	AckIndividual = AckMode("client-individual")
+	AckAuto       AckMode = "auto"
+	AckClient     AckMode = "client"
+	AckIndividual AckMode = "client-individual"
 )
 
 type AckMode string
 
+// A Conn represents a STOMP connection.
 type Conn struct {
+	// Err contains the last received error of an read operation.
 	Err     error
 	scanner *bufio.Scanner
 
@@ -32,11 +34,22 @@ type Conn struct {
 	closed  bool
 }
 
+// A Subscription represents a subscription on a STOMP server to
+// a specified destination.
 type Subscription struct {
-	Id string
-	C  chan Message
+	// Destination is the destination on the STOMP server this subscription
+	// listens on.
+	Destination string
+
+	// C is the channel where messages received for this subscription
+	// are sent to.
+	C chan Message
+
+	id string
 }
 
+// Dial connects to the given network address using net.Dial an then initializes
+// a STOMP connection. Additional header and options can be given via the options parameter.
 func Dial(network, addr string, options ...Option) (*Conn, error) {
 	conn, err := net.Dial(network, addr)
 	if err != nil {
@@ -46,6 +59,9 @@ func Dial(network, addr string, options ...Option) (*Conn, error) {
 	return Connect(conn, options...)
 }
 
+// Connects uses the given ReadWriteCloser to initialize a STOMP connection. Additional header
+// and options can be given via the options parameter. See Dial for examples on how to use
+// options.
 func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
 		conn:    conn,
@@ -76,6 +92,8 @@ func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	return c, nil
 }
 
+// Close closes the connection and all associated subscription
+// channels.
 func (c *Conn) Close() error {
 	c.closeMu.Lock()
 	c.closed = true
@@ -99,13 +117,15 @@ func (c *Conn) closeSubscriptions() {
 	c.subs = make(map[string]chan Message)
 }
 
-func (c *Conn) Subscribe(queue string, options ...Option) (*Subscription, error) {
+// Subscribe is used to register to listen to the given destination. Messages received
+// for this subscription can be received via the C channel on the returned Subscription.
+func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, error) {
 	id := randID()
 	frame := Frame{
 		Command: "SUBSCRIBE",
 		Header: Header{
 			"id":          id,
-			"destination": queue,
+			"destination": destination,
 			"ack":         "auto",
 		},
 	}
@@ -120,7 +140,7 @@ func (c *Conn) Subscribe(queue string, options ...Option) (*Subscription, error)
 	c.subs[id] = ch
 
 	return &Subscription{
-		Id: id,
+		id: id,
 		C:  ch,
 	}, nil
 }
@@ -128,7 +148,7 @@ func (c *Conn) Subscribe(queue string, options ...Option) (*Subscription, error)
 func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 	frame := Frame{
 		Command: "UNSUBSCRIBE",
-		Header:  Header{"id": s.Id},
+		Header:  Header{"id": s.id},
 	}
 
 	if err := c.writeFrame(frame, options...); err != nil {
@@ -137,7 +157,7 @@ func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
-	delete(c.subs, s.Id)
+	delete(c.subs, s.id)
 	return nil
 }
 
