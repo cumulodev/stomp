@@ -9,13 +9,35 @@ import (
 	"sync"
 )
 
-// Valid values for the "ack" subscription header entry.
 const (
-	AckAuto       AckMode = "auto"
-	AckClient     AckMode = "client"
+	// When the ack mode is auto, then the client does not need to send the server
+	// ACK frames for the messages it receives. The server will assume the client
+	// has received the message as soon as it sends it to the client. This
+	// acknowledgment mode can cause messages being transmitted to the client to
+	// get dropped.
+	AckAuto AckMode = "auto"
+
+	// When the ack mode is client, then the client MUST send the server ACK frames
+	// for the messages it processes. If the connection fails before a client sends
+	// an ACK frame for the message the server will assume the message has not been
+	// processed and MAY redeliver the message to another client. The ACK frames
+	// sent by the client will be treated as a cumulative acknowledgment. This means
+	// the acknowledgment operates on the message specified in the ACK frame and all
+	// messages sent to the subscription before the ACK'ed message.
+	//
+	// In case the client did not process some messages, it SHOULD send NACK frames
+	// to tell the server it did not consume these messages.
+	AckClient AckMode = "client"
+
+	// When the ack mode is client-individual, the acknowledgment operates just like
+	// the client acknowledgment mode except that the ACK or NACK frames sent by the
+	// client are not cumulative. This means that an ACK or NACK frame for a
+	// subsequent message MUST NOT cause a previous message to get acknowledged.
 	AckIndividual AckMode = "client-individual"
 )
 
+// Valid values for the "ack" subscription header entry. If the header is not
+// set, it defaults to auto.
 type AckMode string
 
 // A Conn represents a STOMP connection.
@@ -49,7 +71,8 @@ type Subscription struct {
 }
 
 // Dial connects to the given network address using net.Dial an then initializes
-// a STOMP connection. Additional header and options can be given via the options parameter.
+// a STOMP connection. Additional header and options can be given via the
+// options parameter.
 func Dial(network, addr string, options ...Option) (*Conn, error) {
 	conn, err := net.Dial(network, addr)
 	if err != nil {
@@ -59,9 +82,9 @@ func Dial(network, addr string, options ...Option) (*Conn, error) {
 	return Connect(conn, options...)
 }
 
-// Connects uses the given ReadWriteCloser to initialize a STOMP connection. Additional header
-// and options can be given via the options parameter. See Dial for examples on how to use
-// options.
+// Connects uses the given ReadWriteCloser to initialize a STOMP connection.
+// Additional header and options can be given via the options parameter. See
+// Dial for examples on how to use options.
 func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
 		conn:    conn,
@@ -92,8 +115,7 @@ func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	return c, nil
 }
 
-// Close closes the connection and all associated subscription
-// channels.
+// Close closes the connection and all associated subscription channels.
 func (c *Conn) Close() error {
 	c.closeMu.Lock()
 	c.closed = true
@@ -117,8 +139,9 @@ func (c *Conn) closeSubscriptions() {
 	c.subs = make(map[string]chan Message)
 }
 
-// Subscribe is used to register to listen to the given destination. Messages received
-// for this subscription can be received via the C channel on the returned Subscription.
+// Subscribe is used to register to listen to the given destination. Messages
+// received for this subscription can be received via the C channel on the
+// returned Subscription.
 func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, error) {
 	id := randID()
 	frame := Frame{
@@ -145,6 +168,9 @@ func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, 
 	}, nil
 }
 
+// Unsubscribe removes an existing subscription and closes the receiver channel.
+// Once the subscription is removed the STOMP connections will no longer receive
+// messages from that subscription.
 func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 	frame := Frame{
 		Command: "UNSUBSCRIBE",
@@ -161,6 +187,17 @@ func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 	return nil
 }
 
+// Send sends a message to a destination in the messaging system.
+//
+// Note that STOMP treats this destination as an opaque string and no delivery
+// semantics are assumed by the name of a destination. You should consult your
+// STOMP server's documentation to find out how to construct a destination name
+// which gives you the delivery semantics that your application needs.
+//
+// The reliability semantics of the message are also server specific and will
+// depend on the destination value being used and the other message headers
+// such as the "transaction" or "persist" header or other server specific
+// message headers.
 func (c *Conn) Send(destination, contentType string, body []byte, options ...Option) error {
 	frame := Frame{
 		Command: "SEND",
@@ -178,6 +215,10 @@ func (c *Conn) Send(destination, contentType string, body []byte, options ...Opt
 	return c.writeFrame(frame, options...)
 }
 
+// Ack acknowledges the consumption of a message from a subscription using the
+// client or client-individual acknowledgment modes. Any messages received from
+// such a subscription will not be considered to have been consumed until the
+// message has been acknowledged via Ack.
 func (c *Conn) Ack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
@@ -189,6 +230,14 @@ func (c *Conn) Ack(m *Message, options ...Option) error {
 	return nil
 }
 
+// Nack is the opposite of Ack. It tells the server that the client did not
+// consume the message. The server can then either send the message to a
+// different client, discard it, or put it in a dead letter queue. The exact
+// behavior is server specific.
+//
+// Nack applies either to one single message (if the subscription's ack mode is
+// client-individual) or to all messages sent before and not yet Ack'ed or
+// Nack'ed (if the subscription's ack mode is client).
 func (c *Conn) Nack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
