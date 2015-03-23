@@ -9,7 +9,7 @@ package stomp
 // To set this header, specify a expiry Option like below or as a normal
 // function.
 func ExampleOption_customHeaders() {
-	var expires Option = func(f Frame) {
+	var expires Option = func(f *Frame) {
 		f.Header["expires"] = "1308690148000"
 	}
 

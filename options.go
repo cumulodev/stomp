@@ -4,11 +4,11 @@ import "fmt"
 
 // Option represents a function that can modify a STOMP frame before it is sent
 // to the STOMP server. Option is typically used to set headers on the frame.
-type Option func(f Frame)
+type Option func(f *Frame)
 
 // Host sets the name of a virtual host that the client wishes to connect to.
 func Host(host string) Option {
-	return func(f Frame) {
+	return func(f *Frame) {
 		f.Header["host"] = host
 	}
 }
@@ -31,7 +31,7 @@ func Host(host string) Option {
 //  * 0 means it does not want to receive heart-beats.
 //  * otherwise it is the desired number of milliseconds between heart-beats.
 func Heartbeat(client, server int) Option {
-	return func(f Frame) {
+	return func(f *Frame) {
 		heartbeat := fmt.Sprintf("%d,%d", client, server)
 		f.Header["heart-beat"] = heartbeat
 	}
@@ -40,7 +40,7 @@ func Heartbeat(client, server int) Option {
 // Authenticate add the required headers to authenticate against
 // a secured STOMP server.
 func Authenticate(username, password string) Option {
-	return func(f Frame) {
+	return func(f *Frame) {
 		f.Header["login"] = username
 		f.Header["passcode"] = password
 	}
@@ -48,7 +48,7 @@ func Authenticate(username, password string) Option {
 
 // Ack sets the acknowledgment mode of a subscription to the desired value.
 func Ack(ack AckMode) Option {
-	return func(f Frame) {
+	return func(f *Frame) {
 		f.Header["ack"] = string(ack)
 	}
 }
@@ -63,7 +63,7 @@ func Ack(ack AckMode) Option {
 // different header. This function enables reliable messaging for at least
 // Apache ActiveMQ and Apache Apollo
 func Persist() Option {
-	return func(f Frame) {
+	return func(f *Frame) {
 		f.Header["persistent"] = "true"
 	}
 }

@@ -50,7 +50,7 @@ type Conn struct {
 	conn    io.ReadWriteCloser
 
 	subsMu sync.Mutex
-	subs   map[string]chan Message
+	subs   map[string]chan *Message
 
 	closeMu sync.Mutex
 	closed  bool
@@ -65,7 +65,7 @@ type Subscription struct {
 
 	// C is the channel where messages received for this subscription
 	// are sent to.
-	C chan Message
+	C chan *Message
 
 	id string
 }
@@ -89,10 +89,10 @@ func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
 		conn:    conn,
 		scanner: bufio.NewScanner(conn),
-		subs:    make(map[string]chan Message),
+		subs:    make(map[string]chan *Message),
 	}
 
-	c.writeFrame(Frame{
+	c.writeFrame(&Frame{
 		Command: "CONNECT",
 		Header: Header{
 			"host":           "localhost",
@@ -136,7 +136,7 @@ func (c *Conn) closeSubscriptions() {
 		close(ch)
 	}
 
-	c.subs = make(map[string]chan Message)
+	c.subs = make(map[string]chan *Message)
 }
 
 // Subscribe is used to register to listen to the given destination. Messages
@@ -144,7 +144,7 @@ func (c *Conn) closeSubscriptions() {
 // returned Subscription.
 func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, error) {
 	id := randID()
-	frame := Frame{
+	frame := &Frame{
 		Command: "SUBSCRIBE",
 		Header: Header{
 			"id":          id,
@@ -159,7 +159,7 @@ func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, 
 
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
-	ch := make(chan Message, 10)
+	ch := make(chan *Message, 10)
 	c.subs[id] = ch
 
 	return &Subscription{
@@ -172,7 +172,7 @@ func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, 
 // Once the subscription is removed the STOMP connections will no longer receive
 // messages from that subscription.
 func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
-	frame := Frame{
+	frame := &Frame{
 		Command: "UNSUBSCRIBE",
 		Header:  Header{"id": s.id},
 	}
@@ -199,7 +199,7 @@ func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 // such as the "transaction" or "persist" header or other server specific
 // message headers.
 func (c *Conn) Send(destination, contentType string, body []byte, options ...Option) error {
-	frame := Frame{
+	frame := &Frame{
 		Command: "SEND",
 		Header: Header{
 			"destination":  destination,
@@ -222,7 +222,7 @@ func (c *Conn) Send(destination, contentType string, body []byte, options ...Opt
 func (c *Conn) Ack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
-		return c.writeFrame(Frame{
+		return c.writeFrame(&Frame{
 			Command: "ACK",
 			Header:  Header{"id": id},
 		}, options...)
@@ -241,7 +241,7 @@ func (c *Conn) Ack(m *Message, options ...Option) error {
 func (c *Conn) Nack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
-		return c.writeFrame(Frame{
+		return c.writeFrame(&Frame{
 			Command: "NACK",
 			Header:  Header{"id": id},
 		}, options...)

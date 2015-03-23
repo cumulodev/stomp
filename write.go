@@ -18,7 +18,7 @@ func encodeHeader(key, value string) string {
 	return fmt.Sprintf("%s:%s", encode(key), encode(value))
 }
 
-func encodeFrame(f Frame) []byte {
+func encodeFrame(f *Frame) []byte {
 	buf := bytes.Buffer{}
 
 	// encode command
@@ -40,7 +40,7 @@ func encodeFrame(f Frame) []byte {
 	return buf.Bytes()
 }
 
-func (c *Conn) writeFrame(f Frame, options ...Option) error {
+func (c *Conn) writeFrame(f *Frame, options ...Option) error {
 	c.closeMu.Lock()
 	closed := c.closed
 	c.closeMu.Unlock()

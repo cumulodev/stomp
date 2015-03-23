@@ -48,7 +48,7 @@ func (c *Conn) dispatchMessage(frame *Frame) {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
 
-	msg := Message{*frame}
+	msg := &Message{*frame}
 	if ch, ok := c.subs[msg.Subscription()]; ok {
 		ch <- msg
 		return
