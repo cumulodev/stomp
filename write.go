@@ -8,10 +8,10 @@ import (
 
 func encodeHeader(key, value string) string {
 	encode := func(v string) string {
+		v = strings.Replace(v, "\\", "\\\\", -1)
 		v = strings.Replace(v, "\r", "\\r", -1)
 		v = strings.Replace(v, "\n", "\\n", -1)
 		v = strings.Replace(v, ":", "\\c", -1)
-		v = strings.Replace(v, "\\", "\\\\", -1)
 		return v
 	}
 
