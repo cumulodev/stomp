@@ -1,7 +1,6 @@
 package stomp
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"math/rand"
@@ -44,7 +43,7 @@ type AckMode string
 type Conn struct {
 	// Err contains the last received error of an read operation.
 	Err     error
-	scanner *bufio.Scanner
+	scanner *HugeScanner
 
 	writeMu sync.Mutex // protects the Writer part of conn
 	conn    io.ReadWriteCloser
@@ -88,7 +87,7 @@ func Dial(network, addr string, options ...Option) (*Conn, error) {
 func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
 		conn:    conn,
-		scanner: bufio.NewScanner(conn),
+		scanner: NewHugeScanner(conn),
 		subs:    make(map[string]chan *Message),
 	}
 
