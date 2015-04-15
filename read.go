@@ -27,6 +27,7 @@ func (c *Conn) readLoop() {
 
 		if err != nil {
 			c.Err = err
+			c.Close()
 			return
 		}
 
