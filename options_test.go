@@ -15,6 +15,6 @@ func ExampleOption_customHeaders() {
 
 	conn, _ := Dial("tcp", "localhost:61613")
 	conn.Send("/queue/test", "text/plain",
-		[]body{"this message will expire on Tue Jun 21 17:02:28 EDT 2011"},
+		[]byte("this message will expire on Tue Jun 21 17:02:28 EDT 2011"),
 		expires)
 }

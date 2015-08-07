@@ -1,9 +1,8 @@
 package stomp
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
+
 	"strings"
 )
 
@@ -61,12 +60,10 @@ func (c *Conn) dispatchMessage(frame *Frame) {
 
 func (c *Conn) readFrame() (*Frame, error) {
 	// get stomp command
-	c.scanner.Split(bufio.ScanLines)
-	if res := c.scanner.Scan(); !res {
-		return nil, c.scanner.Err()
+	command, err := c.readLine()
+	if err != nil {
+		return nil, err
 	}
-
-	command := c.scanner.Text()
 
 	if len(command) == 0 {
 		// received heartbeat, return empty frame
@@ -75,29 +72,62 @@ func (c *Conn) readFrame() (*Frame, error) {
 
 	// get stomp headers
 	header := make(Header)
-	for c.scanner.Scan() {
-		raw := c.scanner.Text()
-		if len(raw) == 0 {
+	for {
+		line, err := c.readLine()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(line) == 0 {
 			break
 		}
 
-		key, value := decodeHeader(raw)
+		key, value := decodeHeader(line)
 		header[key] = value
 	}
 
 	// get stomp body
-	c.scanner.Split(scanFrame)
-	if res := c.scanner.Scan(); !res {
-		return nil, c.scanner.Err()
+	body, err := c.readBody()
+	if err != nil {
+		return nil, err
 	}
-
-	body := c.scanner.Bytes()
 
 	return &Frame{
 		Command: command,
 		Header:  header,
 		Body:    body,
 	}, nil
+}
+
+func (c *Conn) readLine() (string, error) {
+	line, err := c.reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+
+	// strip CR LF
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+
+	return line
+}
+
+func (c *Conn) readBody() ([]byte, error) {
+	data, err := c.reader.ReadBytes('\x00')
+	if err != nil {
+		return nil, err
+	}
+
+	// strip NULL
+	if len(data) > 0 && data[len(data)-1] == '\x00' {
+		data = data[:len(data)-1]
+	}
+
+	return data
 }
 
 func decodeHeader(header string) (string, string) {
@@ -111,27 +141,4 @@ func decodeHeader(header string) (string, string) {
 
 	kv := strings.SplitN(header, ":", 2)
 	return decode(kv[0]), decode(kv[1])
-}
-
-func scanFrame(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.IndexByte(data, '\x00'); i >= 0 {
-		// we have a non-empty body.
-		return i + 1, stripNull(data[0:i]), nil
-	}
-	if atEOF {
-		return len(data), stripNull(data), nil
-	}
-	// request more data.
-	return 0, nil, nil
-}
-
-func stripNull(data []byte) []byte {
-	if len(data) > 0 && data[len(data)-1] == '\x00' {
-		return data[0 : len(data)-1]
-	}
-
-	return data
 }

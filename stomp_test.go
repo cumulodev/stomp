@@ -1,5 +1,7 @@
 package stomp
 
+import "fmt"
+
 // To connect to a STOMP server that requires authentication, the Authenticate options
 // adds the required headers.
 func ExampleDial_authenticate() {
@@ -15,6 +17,7 @@ func ExampleConn_Subscribe() {
 	conn, _ := Dial("tcp", "localhost:61613")
 	sub, _ := conn.Subscribe("/queue/test")
 	for frame := range sub.C {
+		fmt.Printf("recv frame: %v\n", frame)
 	}
 }
 
@@ -23,5 +26,6 @@ func ExampleConn_Subscribe_ackClient() {
 	conn, _ := Dial("tcp", "localhost:61613")
 	sub, _ := conn.Subscribe("/queue/test", Ack(AckClient))
 	for frame := range sub.C {
+		fmt.Printf("recv frame: %v\n", frame)
 	}
 }
