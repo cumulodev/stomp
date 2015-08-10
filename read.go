@@ -102,7 +102,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 func (c *Conn) readLine() (string, error) {
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	// strip CR LF
@@ -113,7 +113,7 @@ func (c *Conn) readLine() (string, error) {
 		line = line[:len(line)-1]
 	}
 
-	return line
+	return line, nil
 }
 
 func (c *Conn) readBody() ([]byte, error) {
@@ -127,7 +127,7 @@ func (c *Conn) readBody() ([]byte, error) {
 		data = data[:len(data)-1]
 	}
 
-	return data
+	return data, nil
 }
 
 func decodeHeader(header string) (string, string) {
