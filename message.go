@@ -1,6 +1,9 @@
 package stomp
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 type Header map[string]string
 
@@ -18,6 +21,8 @@ type Frame struct {
 	// Body contains the data of the optional body. Only the SEND, MESSAGE, and
 	// ERROR frames MAY have a body. All other frames MUST NOT have a body.
 	Body []byte
+
+	ch chan error
 }
 
 func (f *Frame) get(key string) string {
@@ -102,4 +107,28 @@ func (m *Message) ContentLength() int {
 	}
 
 	return length
+}
+
+type Connected struct {
+	Frame
+}
+
+func (m *Connected) ReadHeartBeat() int {
+	beats := strings.Split(m.get("heart-beat"), ",")
+	if len(beats) != 2 {
+		return 0
+	}
+
+	beat, _ := strconv.Atoi(beats[0])
+	return beat
+}
+
+func (m *Connected) WriteHeartBeat() int {
+	beats := strings.Split(m.get("heart-beat"), ",")
+	if len(beats) != 2 {
+		return 0
+	}
+
+	beat, _ := strconv.Atoi(beats[1])
+	return beat
 }

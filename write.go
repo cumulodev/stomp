@@ -2,9 +2,46 @@ package stomp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
+
+type frame struct {
+	body    *Frame
+	options []Option
+	ch      chan error
+}
+
+func (c *Conn) safeWrite(f *Frame, options ...Option) error {
+	ch := make(chan error)
+	frame := frame{
+		body:    f,
+		options: options,
+		ch:      ch,
+	}
+
+	select {
+	case <-c.closeC:
+		return errors.New("connection closed")
+
+	case c.writeC <- frame:
+		return <-ch
+	}
+}
+
+// unsafeWrite writes the next frame. This function is not thread safe!
+func (c *Conn) unsafeWrite(f *Frame, options ...Option) error {
+	if c.whb > 0 {
+		c.conn.SetWriteDeadline(time.Now().Add(2 * c.whb))
+	} else {
+		c.conn.SetWriteDeadline(time.Time{})
+	}
+
+	_, err := c.conn.Write(encodeFrame(f, options...))
+	return err
+}
 
 func encodeHeader(key, value string) string {
 	encode := func(v string) string {
@@ -18,10 +55,13 @@ func encodeHeader(key, value string) string {
 	return fmt.Sprintf("%s:%s", encode(key), encode(value))
 }
 
-func encodeFrame(f *Frame) []byte {
-	buf := bytes.Buffer{}
+func encodeFrame(f *Frame, options ...Option) []byte {
+	for _, fn := range options {
+		fn(f)
+	}
 
 	// encode command
+	buf := bytes.Buffer{}
 	buf.WriteString(f.Command)
 	buf.WriteString("\n")
 
@@ -38,38 +78,4 @@ func encodeFrame(f *Frame) []byte {
 	buf.WriteString("\x00\n")
 
 	return buf.Bytes()
-}
-
-func (c *Conn) writeFrame(f *Frame, options ...Option) error {
-	c.closeMu.Lock()
-	closed := c.closed
-	c.closeMu.Unlock()
-	if closed {
-		return fmt.Errorf("writing to closed connection")
-	}
-
-	for _, fn := range options {
-		fn(f)
-	}
-
-	data := encodeFrame(f)
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	_, err := c.conn.Write(data)
-	return err
-}
-
-func (c *Conn) writeHeartBeat() error {
-	c.closeMu.Lock()
-	closed := c.closed
-	c.closeMu.Unlock()
-	if closed {
-		return fmt.Errorf("writing to closed connection")
-	}
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	_, err := c.conn.Write([]byte{'\n'})
-	return err
 }

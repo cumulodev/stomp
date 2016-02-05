@@ -3,10 +3,11 @@ package stomp
 import (
 	"bufio"
 	"fmt"
-	"io"
+	"log"
 	"math/rand"
 	"net"
 	"sync"
+	"time"
 )
 
 const (
@@ -43,17 +44,26 @@ type AckMode string
 // A Conn represents a STOMP connection.
 type Conn struct {
 	// Err contains the last received error of an read operation.
-	Err    error
+	Err error
+
+	Reconnect func(n int, d time.Duration, err error) (bool, time.Duration)
+
 	reader *bufio.Reader
 
-	writeMu sync.Mutex // protects the Writer part of conn
-	conn    io.ReadWriteCloser
+	network string
+	addr    string
+	options []Option
+	conn    net.Conn
 
 	subsMu sync.Mutex
-	subs   map[string]chan *Message
+	subs   map[string]*Subscription
 
-	closeMu sync.Mutex
-	closed  bool
+	rhb time.Duration
+	whb time.Duration
+
+	closeC chan struct{}
+	writeC chan frame
+	readC  chan int
 }
 
 // A Subscription represents a subscription on a STOMP server to
@@ -67,7 +77,9 @@ type Subscription struct {
 	// are sent to.
 	C chan *Message
 
-	id string
+	id          string
+	destination string
+	options     []Option
 }
 
 // Dial connects to the given network address using net.Dial an then initializes
@@ -79,64 +91,81 @@ func Dial(network, addr string, options ...Option) (*Conn, error) {
 		return nil, err
 	}
 
-	return Connect(conn, options...)
-}
-
-// Connects uses the given ReadWriteCloser to initialize a STOMP connection.
-// Additional header and options can be given via the options parameter. See
-// Dial for examples on how to use options.
-func Connect(conn io.ReadWriteCloser, options ...Option) (*Conn, error) {
 	c := &Conn{
-		conn:   conn,
+		Err:       nil,
+		Reconnect: ExponentialBackoffReconnect,
+
+		conn:    conn,
+		network: network,
+		addr:    addr,
+		options: options,
+
 		reader: bufio.NewReader(conn),
-		subs:   make(map[string]chan *Message),
+		subs:   make(map[string]*Subscription),
+
+		rhb: 5 * time.Second,
+		whb: 5 * time.Second,
+
+		closeC: make(chan struct{}),
+		writeC: make(chan frame),
+		readC:  make(chan int, 1),
 	}
 
-	c.writeFrame(&Frame{
-		Command: "CONNECT",
-		Header: Header{
-			"host":           "localhost",
-			"accept-version": "1.2",
-			"heart-beat":     "0,1000",
-		},
-	}, options...)
-
-	f, err := c.readFrame()
+	err = c.connect(options)
 	if err != nil {
 		return nil, err
 	}
 
-	if f.Command == "ERROR" {
-		return nil, NewError(f)
+	go c.readLoop()
+	go c.writeLoop()
+	return c, nil
+}
+
+func (c *Conn) connect(options []Option) error {
+	err := c.unsafeWrite(&Frame{
+		Command: "CONNECT",
+		Header: Header{
+			"host":           "localhost",
+			"accept-version": "1.2",
+			"heart-beat":     fmt.Sprintf("%d,%d", c.whb/time.Millisecond, c.rhb/time.Millisecond),
+		},
+	}, options...)
+	if err != nil {
+		return err
 	}
 
-	//TODO parse CONNECTED frame
-	go c.readLoop()
-	return c, nil
+	f, err := c.unsafeRead()
+	if err != nil {
+		return err
+	}
+
+	if f.Command == "ERROR" {
+		return NewError(f)
+	}
+
+	// parse connected frame and store heart beat
+	connected := &Connected{*f}
+	c.rhb = time.Duration(connected.ReadHeartBeat()) * time.Millisecond
+	c.whb = time.Duration(connected.WriteHeartBeat()) * time.Millisecond
+	return nil
 }
 
 // Close closes the connection and all associated subscription channels.
 func (c *Conn) Close() error {
-	c.closeMu.Lock()
-	c.closed = true
-	c.closeMu.Unlock()
-
+	log.Printf("DEBUG: closing ...")
+	close(c.closeC)
 	c.closeSubscriptions()
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	return c.conn.Close()
 }
 
 func (c *Conn) closeSubscriptions() {
 	c.subsMu.Lock()
-	defer c.subsMu.Unlock()
-
-	for _, ch := range c.subs {
-		close(ch)
+	for _, sub := range c.subs {
+		close(sub.C)
 	}
 
-	c.subs = make(map[string]chan *Message)
+	c.subs = make(map[string]*Subscription)
+	c.subsMu.Unlock()
 }
 
 // Subscribe is used to register to listen to the given destination. Messages
@@ -152,20 +181,22 @@ func (c *Conn) Subscribe(destination string, options ...Option) (*Subscription, 
 			"ack":         "auto",
 		},
 	}
+	sub := &Subscription{
+		C:           make(chan *Message, 10),
+		id:          id,
+		destination: destination,
+		options:     options,
+	}
 
-	if err := c.writeFrame(frame, options...); err != nil {
+	if err := c.safeWrite(frame, options...); err != nil {
 		return nil, err
 	}
 
 	c.subsMu.Lock()
-	defer c.subsMu.Unlock()
-	ch := make(chan *Message, 10)
-	c.subs[id] = ch
+	c.subs[id] = sub
+	c.subsMu.Unlock()
 
-	return &Subscription{
-		id: id,
-		C:  ch,
-	}, nil
+	return sub, nil
 }
 
 // Unsubscribe removes an existing subscription and closes the receiver channel.
@@ -177,13 +208,14 @@ func (c *Conn) Unsubscribe(s *Subscription, options ...Option) error {
 		Header:  Header{"id": s.id},
 	}
 
-	if err := c.writeFrame(frame, options...); err != nil {
+	if err := c.safeWrite(frame, options...); err != nil {
 		return err
 	}
 
 	c.subsMu.Lock()
-	defer c.subsMu.Unlock()
 	delete(c.subs, s.id)
+	c.subsMu.Unlock()
+
 	return nil
 }
 
@@ -212,7 +244,7 @@ func (c *Conn) Send(destination, contentType string, body []byte, options ...Opt
 		frame.Header["content-length"] = fmt.Sprintf("%d", len(body))
 	}
 
-	return c.writeFrame(frame, options...)
+	return c.safeWrite(frame, options...)
 }
 
 // Ack acknowledges the consumption of a message from a subscription using the
@@ -222,7 +254,7 @@ func (c *Conn) Send(destination, contentType string, body []byte, options ...Opt
 func (c *Conn) Ack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
-		return c.writeFrame(&Frame{
+		return c.safeWrite(&Frame{
 			Command: "ACK",
 			Header:  Header{"id": id},
 		}, options...)
@@ -241,7 +273,7 @@ func (c *Conn) Ack(m *Message, options ...Option) error {
 func (c *Conn) Nack(m *Message, options ...Option) error {
 	id := m.Ack()
 	if id != "" {
-		return c.writeFrame(&Frame{
+		return c.safeWrite(&Frame{
 			Command: "NACK",
 			Header:  Header{"id": id},
 		}, options...)

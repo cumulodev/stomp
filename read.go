@@ -1,64 +1,45 @@
 package stomp
 
 import (
-	"fmt"
-
 	"strings"
+	"time"
 )
 
 var newline = []byte{}
 var null = []byte{0x0}
+var heartbeat = []byte{'\n'}
 
-func (c *Conn) readLoop() {
-	for {
-		frame, err := c.readFrame()
+func (c *Conn) safeRead() chan *Frame {
+	ch := make(chan *Frame, 1)
 
-		c.closeMu.Lock()
-		closed := c.closed
-		c.closeMu.Unlock()
-
-		// if connection was closed, the above received
-		// error (if any) is most likely due to the
-		// closed connection.
-		if closed {
+	go func() {
+		select {
+		case <-c.closeC:
 			return
+
+		case c.readC <- 1:
+			f, err := c.unsafeRead()
+			if err != nil {
+				c.error(err)
+				return
+			}
+
+			<-c.readC
+			ch <- f
 		}
+	}()
 
-		if err != nil {
-			c.Err = err
-			c.Close()
-			return
-		}
-
-		switch frame.Command {
-		case "MESSAGE":
-			c.dispatchMessage(frame)
-
-		case "ERROR":
-			c.Err = NewError(frame)
-			c.Close()
-		}
-
-		//NOTE: if a default case is created, do not forget
-		// about an empty frame (=heartbeat)
-	}
+	return ch
 }
 
-func (c *Conn) dispatchMessage(frame *Frame) {
-	c.subsMu.Lock()
-	defer c.subsMu.Unlock()
-
-	msg := &Message{*frame}
-	if ch, ok := c.subs[msg.Subscription()]; ok {
-		ch <- msg
-		return
+// unsafeRead reads the next frame. This function is not thread safe!
+func (c *Conn) unsafeRead() (*Frame, error) {
+	if c.rhb > 0 {
+		c.conn.SetReadDeadline(time.Now().Add(2 * c.rhb))
+	} else {
+		c.conn.SetReadDeadline(time.Time{})
 	}
 
-	c.Err = fmt.Errorf("message received for unknown subscription on %q", msg.Destination())
-	c.Close()
-}
-
-func (c *Conn) readFrame() (*Frame, error) {
 	// get stomp command
 	command, err := c.readLine()
 	if err != nil {
