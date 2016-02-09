@@ -47,6 +47,10 @@ func (c *Conn) error(err error) {
 
 		go c.readLoop()
 		go c.writeLoop()
+
+		if c.ReconnectSuccess != nil {
+			c.ReconnectSuccess(n)
+		}
 	}()
 }
 

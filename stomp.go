@@ -46,7 +46,8 @@ type Conn struct {
 	// Err contains the last received error of an read operation.
 	Err error
 
-	Reconnect func(n int, d time.Duration, err error) (bool, time.Duration)
+	Reconnect        func(n int, d time.Duration, err error) (bool, time.Duration)
+	ReconnectSuccess func(n int)
 
 	reader *bufio.Reader
 
@@ -92,8 +93,9 @@ func Dial(network, addr string, options ...Option) (*Conn, error) {
 	}
 
 	c := &Conn{
-		Err:       nil,
-		Reconnect: ExponentialBackoffReconnect,
+		Err:              nil,
+		Reconnect:        ExponentialBackoffReconnect,
+		ReconnectSuccess: nil,
 
 		conn:    conn,
 		network: network,
